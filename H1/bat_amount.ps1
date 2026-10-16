@@ -6,6 +6,7 @@ Get-ChildItem -Path C:\ -Recurse -Filter *.bat -File -ErrorAction SilentlyContin
 Get-ChildItem -Path C:\ -Recurse -Filter *.cmd -File -ErrorAction SilentlyContinue | Measure-Object | Select-Object -ExpandProperty Count
 
 # Option 2, loop the file system looking for both files types to save time.
+<#
 $count = 0
 Get-ChildItem -Path C:\ -Recurse -File -ErrorAction SilentlyContinue
     ForEach-Object {
@@ -14,3 +15,10 @@ Get-ChildItem -Path C:\ -Recurse -File -ErrorAction SilentlyContinue
         }
     }
 Write-Host "Total .bat and .cmd files found: $count"
+#>
+
+<#
+$files = Get-ChildItem -Path C:\ -Include *.bat,*.cmd -Recurse -File -ErrorAction SilentlyContinue
+$count = @($files).Count
+Write-Host "Total amount of .bat and .cmd files found: $count"
+#>
