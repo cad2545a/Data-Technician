@@ -48,13 +48,41 @@ function select-domain {
     }
 }
 
+function resolve-ou-path {
+    param(
+        [string]$Ou
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Ou)) {
+        return $null
+    }
+
+    if ($Ou -match '^(?:OU=|CN=|DC=)') {
+        return $Ou
+    }
+
+    $domainDn = (Get-ADDomain @script:AdParams).DistinguishedName
+    return "OU=$Ou,$domainDn"
+}
+
 function add-user {
     $ad = $script:AdParams
     $first = Read-Host "First name"
     $last  = Read-Host "Last name"
     $sam = Read-Host "Username"
-    $ou = Read-Host "OU"
+    $ou = Read-Host "OU (for example: salg)"
     $pass = Read-Host "Password" -AsSecureString
+
+    if ([string]::IsNullOrWhiteSpace($sam)) {
+        Write-Host "Username cannot be empty."
+        return
+    }
+
+    $ouPath = resolve-ou-path -Ou $ou
+    if (-not $ouPath) {
+        Write-Host "OU cannot be empty."
+        return
+    }
 
     if (Get-ADUser @ad -Filter "SamAccountName -eq '$sam'" -ErrorAction SilentlyContinue) {
         Write-Host "User '$sam' already exists."
@@ -68,12 +96,12 @@ function add-user {
             -Surname $last `
             -SamAccountName $sam `
             -UserPrincipalName "$sam@$($script:UpnSuffix)" `
-            -Path $ou `
+            -Path $ouPath `
             -AccountPassword $pass `
             -ChangePasswordAtLogon $true `
             -Enabled $true `
             -ErrorAction Stop
-        Write-Host "User '$sam' has been created."
+        Write-Host "User '$sam' has been created in $ouPath."
     }
     catch {
         Write-Host "Error while creating user: $($_.Exception.Message)"
