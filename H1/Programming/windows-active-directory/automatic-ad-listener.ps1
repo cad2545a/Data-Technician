@@ -1,8 +1,177 @@
 # Run as Administrator on your AD Domain Server
 $port = 8080
 $domainSuffix = "asmild.online"
-$baseDN = "DC=asmild,DC=online"  # Roden af dit AD
+$baseDN = "DC=asmild,DC=online"
 
+# -------------------------------------------------------------------
+# FUNKTION: Generer brugernavn og rens danske tegn
+# -------------------------------------------------------------------
+function Get-SanitizedUsername {
+    param (
+        [string]$fullName
+    )
+
+    $nameParts = $fullName.Trim() -split '\s+'
+    $givenName = $nameParts[0]
+    $surname = if ($nameParts.Length -gt 1) { ($nameParts[1..($nameParts.Length - 1)]) -join ' ' } else { "" }
+
+    $cleanGiven = $givenName.ToLower() -replace 'æ','ae' -replace 'ø','oe' -replace 'å','aa'
+    $cleanSurname = $surname.ToLower() -replace 'æ','ae' -replace 'ø','oe' -replace 'å','aa' -replace '\s+',''
+
+    if ($cleanSurname -ne "") {
+        $username = $cleanGiven.Substring(0, 1) + $cleanSurname
+    } else {
+        $username = $cleanGiven
+    }
+
+    return @{
+        Username  = $username
+        GivenName = $givenName
+        Surname   = $surname
+        FullName  = $fullName
+    }
+}
+
+# -------------------------------------------------------------------
+# 1. FUNKTION: Opret eller opdater bruger i AD (add-user)
+# -------------------------------------------------------------------
+function Add-ADUserFromSheet {
+    param (
+        $user
+    )
+
+    $parsedName = Get-SanitizedUsername -fullName $user.name
+    $username  = $parsedName.Username
+    $givenName = $parsedName.GivenName
+    $surname   = $parsedName.Surname
+    $fullName  = $parsedName.FullName
+
+    $userEmail = "$username@$domainSuffix"
+    $upn       = "$username@$domainSuffix"
+    $dept      = if ($null -ne $user.department) { [string]$user.department.Trim() } else { "" }
+    $title     = if ($null -ne $user.title) { [string]$user.title.Trim() } else { "" }
+
+    $enabled = $true
+    if ($null -ne $user.enabled) {
+        $enabledStr = [string]$user.enabled
+        $enabled = $enabledStr.Trim().ToLowerInvariant() -in @("yes", "true", "1")
+    }
+
+    $targetOUPath = $null
+    if (-not [string]::IsNullOrWhiteSpace($dept)) {
+        $ouFilter = "OU=$dept,$baseDN"
+        $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$ouFilter'" -ErrorAction SilentlyContinue
+
+        if (-not $existingOU) {
+            New-ADOrganizationalUnit -Name $dept -Path $baseDN
+            Write-Host "Oprettede ny OU: $dept" -ForegroundColor Cyan
+        }
+        $targetOUPath = $ouFilter
+    }
+
+    $existingUser = Get-ADUser -Filter "SamAccountName -eq '$username'" -ErrorAction SilentlyContinue
+
+    if ($existingUser) {
+        Set-ADUser -Identity $username `
+            -GivenName $givenName `
+            -Surname $surname `
+            -DisplayName $fullName `
+            -Department $dept `
+            -Title $title `
+            -EmailAddress $userEmail `
+            -Enabled $enabled
+
+        if ($null -ne $targetOUPath) {
+            Move-ADObject -Identity $existingUser.DistinguishedName -TargetPath $targetOUPath -ErrorAction SilentlyContinue
+        }
+        Write-Host "Opdaterede og flyttede bruger: $username" -ForegroundColor Yellow
+    }
+    else {
+        $password = ConvertTo-SecureString "ChangeMe123!" -AsPlainText -Force
+        $adUserParams = @{
+            SamAccountName        = $username
+            UserPrincipalName     = $upn
+            Name                  = $fullName
+            GivenName             = $givenName
+            Surname               = $surname
+            DisplayName           = $fullName
+            Department            = $dept
+            Title                 = $title
+            EmailAddress          = $userEmail
+            AccountPassword       = $password
+            Enabled               = $enabled
+            ChangePasswordAtLogon = $true
+        }
+
+        if ($null -ne $targetOUPath) {
+            $adUserParams.Add("Path", $targetOUPath)
+        }
+
+        New-ADUser @adUserParams
+        Write-Host "Oprettede ny bruger: $username" -ForegroundColor Green
+    }
+}
+
+# -------------------------------------------------------------------
+# 2. FUNKTION: Deaktiver bruger i AD (disable-user)
+# -------------------------------------------------------------------
+function Disable-ADUserFromSheet {
+    param (
+        $user
+    )
+
+    $parsedName = Get-SanitizedUsername -fullName $user.name
+    $username = $parsedName.Username
+
+    $existingUser = Get-ADUser -Filter "SamAccountName -eq '$username'" -ErrorAction SilentlyContinue
+    if ($existingUser) {
+        Disable-ADAccount -Identity $username
+        Write-Host "Deaktiverede bruger: $username" -ForegroundColor Red
+    }
+}
+
+# -------------------------------------------------------------------
+# 3. FUNKTION: Nulstil adgangskode i AD (reset-password)
+# -------------------------------------------------------------------
+function Reset-ADUserPasswordFromSheet {
+    param (
+        $user
+    )
+
+    $parsedName = Get-SanitizedUsername -fullName $user.name
+    $username = $parsedName.Username
+
+    $existingUser = Get-ADUser -Filter "SamAccountName -eq '$username'" -ErrorAction SilentlyContinue
+    if ($existingUser) {
+        $secPassword = ConvertTo-SecureString "ResetMe123!" -AsPlainText -Force
+        Set-ADAccountPassword -Identity $username -NewPassword $secPassword -Reset
+        Set-ADUser -Identity $username -ChangePasswordAtLogon $true
+        Write-Host "Nulstillede adgangskode for: $username" -ForegroundColor Magenta
+    }
+}
+
+# -------------------------------------------------------------------
+# 4. FUNKTION: Hent alle deaktiverede brugere
+# -------------------------------------------------------------------
+function Get-DisabledADUsers {
+    $disabledUsers = Get-ADUser -Filter "Enabled -eq '$false'" -Properties DisplayName, Department, Title, EmailAddress
+    $result = @()
+
+    foreach ($u in $disabledUsers) {
+        $result += @{
+            name       = $u.DisplayName
+            username   = $u.SamAccountName
+            department = $u.Department
+            title      = $u.Title
+            email      = $u.EmailAddress
+        }
+    }
+    return $result
+}
+
+# -------------------------------------------------------------------
+# HTTP LISTENER LOOP
+# -------------------------------------------------------------------
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://*:$port/sync-ad/")
 $listener.Start()
@@ -34,130 +203,50 @@ try {
                 throw "Request body is empty."
             }
 
-            $users = $jsonBody | ConvertFrom-Json
-            if ($null -eq $users) {
-                throw "No users were provided."
-            }
-            if ($users -isnot [System.Array]) {
-                $users = @($users)
+            $items = $jsonBody | ConvertFrom-Json
+            if ($items -isnot [System.Array]) {
+                $items = @($items)
             }
 
-            foreach ($user in $users) {
-                if ($null -eq $user -or [string]::IsNullOrWhiteSpace($user.name)) { continue }
+            # Tjek om anmodningen er en get_disabled hentning
+            if ($items[0].action -eq "get_disabled") {
+                $disabledList = Get-DisabledADUsers
+                $jsonResponse = $disabledList | ConvertTo-Json -Depth 2
 
-                $fullName = [string]$user.name.Trim()
-                $nameParts = $fullName -split '\s+'
-                $givenName = $nameParts[0]
-                if ($nameParts.Length -gt 1) {
-                    $surname = ($nameParts[1..($nameParts.Length - 1)]) -join ' '
-                }
-                else {
-                    $surname = ""
-                }
+                $buffer = [System.Text.Encoding]::UTF8.GetBytes($jsonResponse)
+                $response.StatusCode = 200
+                $response.ContentType = "application/json"
+                $response.ContentLength64 = $buffer.Length
+                $response.OutputStream.Write($buffer, 0, $buffer.Length)
+                continue
+            }
 
-                # 1. Sanitér tegn (æ, ø, å) til standard ASCII
-                $cleanGiven = $givenName.ToLower() -replace 'æ','ae' -replace 'ø','oe' -replace 'å','aa'
-                $cleanSurname = $surname.ToLower() -replace 'æ','ae' -replace 'ø','oe' -replace 'å','aa' -replace '\s+',''
-
-                # 2. Generér brugernavn
-                if ($cleanSurname -ne "") {
-                    $username = $cleanGiven.Substring(0, 1) + $cleanSurname
-                }
-                else {
-                    $username = $cleanGiven
-                }
-
-                $userEmail = "$username@$domainSuffix"
-                $upn = "$username@$domainSuffix"
-                $dept = if ($null -ne $user.department) { [string]$user.department.Trim() } else { "" }
-                $title = if ($null -ne $user.title) { [string]$user.title.Trim() } else { "" }
-
-                $enabledValue = $user.enabled
-                if ($enabledValue -is [bool]) {
-                    $enabled = $enabledValue
-                }
-                elseif ($enabledValue -is [string]) {
-                    $enabled = $enabledValue.Trim().ToLowerInvariant() -in @("yes", "true", "1")
-                }
-                else {
-                    $enabled = [bool]$enabledValue
-                }
-
-                # 3. Håndter OU oprettelse og tjek for tom afdeling
-                $targetOUPath = $null
-                if (-not [string]::IsNullOrWhiteSpace($dept)) {
-                    $ouFilter = "OU=$dept,$baseDN"
-                    $existingOU = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$ouFilter'" -ErrorAction SilentlyContinue
-
-                    if (-not $existingOU) {
-                        New-ADOrganizationalUnit -Name $dept -Path $baseDN
-                        Write-Host "Oprettede ny OU: $dept" -ForegroundColor Cyan
-                    }
-
-                    $targetOUPath = $ouFilter
-                }
-
-                $existingUser = Get-ADUser -Filter "SamAccountName -eq '$username'" -ErrorAction SilentlyContinue
-
-                if ($existingUser) {
-                    Set-ADUser -Identity $username `
-                        -GivenName $givenName `
-                        -Surname $surname `
-                        -DisplayName $fullName `
-                        -Department $dept `
-                        -Title $title `
-                        -EmailAddress $userEmail `
-                        -Enabled $enabled
-
-                    # Flyt kun brugeren hvis en specifik OU er angivet
-                    if ($null -ne$targetOUPath) {
-                        Move-ADObject -Identity $existingUser.DistinguishedName -TargetPath$targetOUPath -ErrorAction SilentlyContinue
-                    }
-                    Write-Host "Opdaterede og flyttede bruger: $username" -ForegroundColor Yellow
-                }
-                else {
-                    $password = ConvertTo-SecureString "ChangeMe123!" -AsPlainText -Force
-
-                    # Opret parametre til New-ADUser
-                    $adUserParams = @{
-                        SamAccountName        = $username
-                        UserPrincipalName     = $upn
-                        Name                  = $fullName
-                        GivenName             = $givenName
-                        Surname               = $surname
-                        DisplayName           = $fullName
-                        Department            = $dept
-                        Title                 = $title
-                        EmailAddress          = $userEmail
-                        AccountPassword       = $password
-                        Enabled               = $enabled
-                        ChangePasswordAtLogon = $true
-                    }
-
-                    # Tilføj kun -Path hvis $targetOUPath er sat (ellers bruges AD standard CN=Users)
-                    if ($null -ne$targetOUPath) {
-                        $adUserParams.Add("Path", $targetOUPath)
-                    }
-
-                    New-ADUser @adUserParams
-
-                    Write-Host "Oprettede ny bruger: $username i OU:$(if ($targetOUPath) {$targetOUPath } else { 'CN=Users' })" -ForegroundColor Green
+            # Eksekver handling pr. bruger
+            foreach ($item in $items) {
+                switch ($item.action) {
+                    "add"            { Add-ADUserFromSheet -user $item }
+                    "disable"        { Disable-ADUserFromSheet -user $item }
+                    "reset_password" { Reset-ADUserPasswordFromSheet -user $item }
+                    default          { Add-ADUserFromSheet -user $item }
                 }
             }
 
-            $jsonResponse = '{"status":"success","message":"Synkronisering gennemført!"}'
+            $jsonResponse = '{"status":"success","message":"Handling gennemfoert!"}'
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($jsonResponse)
-            $response.StatusCode = 200$response.ContentType = "application/json"
-            $response.ContentLength64 =$buffer.Length
-            $response.OutputStream.Write($buffer, 0,$buffer.Length)
+            $response.StatusCode = 200
+            $response.ContentType = "application/json"
+            $response.ContentLength64 = $buffer.Length
+            $response.OutputStream.Write($buffer, 0, $buffer.Length)
         }
         catch {
-            $errMessage =$_.Exception.Message.Replace('\', '\\').Replace('"', '\"')
+            $errMessage = $_.Exception.Message.Replace('\', '\\').Replace('"', '\"')
             $errResponse = "{`"status`":`"error`",`"message`":`"$errMessage`"}"
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($errResponse)
-            $response.StatusCode = 500$response.ContentType = "application/json"
-            $response.ContentLength64 =$buffer.Length
-            $response.OutputStream.Write($buffer, 0,$buffer.Length)
+
+            $response.StatusCode = 500
+            $response.ContentType = "application/json"
+            $response.ContentLength64 = $buffer.Length
+            $response.OutputStream.Write($buffer, 0, $buffer.Length)
         }
         finally {
             $response.Close()
