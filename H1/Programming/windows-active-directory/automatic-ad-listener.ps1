@@ -33,7 +33,7 @@ function Get-SanitizedUsername {
 }
 
 # -------------------------------------------------------------------
-# 1. FUNKTION: Opret eller opdater bruger i AD (add-user)
+# 1. FUNKTION: Opret eller opdater bruger i AD
 # -------------------------------------------------------------------
 function Add-ADUserFromSheet {
     param (
@@ -113,25 +113,29 @@ function Add-ADUserFromSheet {
 }
 
 # -------------------------------------------------------------------
-# 2. FUNKTION: Deaktiver bruger i AD (disable-user)
+# 2. FUNKTION: Deaktiver bruger i AD (Tjekker om kunden er sat til "No")
 # -------------------------------------------------------------------
 function Disable-ADUserFromSheet {
     param (
         $user
     )
 
-    $parsedName = Get-SanitizedUsername -fullName $user.name
-    $username = $parsedName.Username
+    # Tjek om brugeren rent faktisk er sat til No/false i Sheets
+    $enabledStr = if ($null -ne $user.enabled) { [string]$user.enabled.Trim().ToLowerInvariant() } else { "yes" }
+    if ($enabledStr -in @("no", "false", "0")) {
+        $parsedName = Get-SanitizedUsername -fullName $user.name
+        $username = $parsedName.Username
 
-    $existingUser = Get-ADUser -Filter "SamAccountName -eq '$username'" -ErrorAction SilentlyContinue
-    if ($existingUser) {
-        Disable-ADAccount -Identity $username
-        Write-Host "Deaktiverede bruger: $username" -ForegroundColor Red
+        $existingUser = Get-ADUser -Filter "SamAccountName -eq '$username'" -ErrorAction SilentlyContinue
+        if ($existingUser) {
+            Disable-ADAccount -Identity $username
+            Write-Host "Deaktiverede bruger: $username" -ForegroundColor Red
+        }
     }
 }
 
 # -------------------------------------------------------------------
-# 3. FUNKTION: Nulstil adgangskode i AD (reset-password)
+# 3. FUNKTION: Nulstil adgangskode i AD
 # -------------------------------------------------------------------
 function Reset-ADUserPasswordFromSheet {
     param (
@@ -151,19 +155,25 @@ function Reset-ADUserPasswordFromSheet {
 }
 
 # -------------------------------------------------------------------
-# 4. FUNKTION: Hent alle deaktiverede brugere
+# 4. FUNKTION: Hent alle deaktiverede brugere (Filtrerer systemkonti fra)
 # -------------------------------------------------------------------
 function Get-DisabledADUsers {
     $disabledUsers = Get-ADUser -Filter "Enabled -eq '$false'" -Properties DisplayName, Department, Title, EmailAddress
+    
+    # Liste over indbyggede systemkonti der skal ekskluderes
+    $systemAccounts = @("krbtgt", "Guest", "WDAGUtilityAccount", "DefaultAccount")
+    
     $result = @()
 
     foreach ($u in $disabledUsers) {
-        $result += @{
-            name       = $u.DisplayName
-            username   = $u.SamAccountName
-            department = $u.Department
-            title      = $u.Title
-            email      = $u.EmailAddress
+        if ($u.SamAccountName -notin $systemAccounts) {
+            $result += @{
+                name       = if ($u.DisplayName) { $u.DisplayName } else { $u.SamAccountName }
+                username   = $u.SamAccountName
+                department = $u.Department
+                title      = $u.Title
+                email      = $u.EmailAddress
+            }
         }
     }
     return $result
@@ -208,7 +218,7 @@ try {
                 $items = @($items)
             }
 
-            # Tjek om anmodningen er en get_disabled hentning
+            # Tjek om anmodningen er get_disabled
             if ($items[0].action -eq "get_disabled") {
                 $disabledList = Get-DisabledADUsers
                 $jsonResponse = $disabledList | ConvertTo-Json -Depth 2
