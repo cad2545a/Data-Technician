@@ -96,7 +96,7 @@ function Ensure-DepartmentOU {
         [string]$Department
     )
 
-    if (:IsNullOrWhiteSpace($Department)) {
+    if ([string]::IsNullOrWhiteSpace($Department)) {
         return $null
     }
 
@@ -333,7 +333,7 @@ try {
 
             $reader.Dispose()
 
-            if (:IsNullOrWhiteSpace($body)) {
+            if ([string]::IsNullOrWhiteSpace($body)) {
                 throw "Request body is empty"
             }
 
