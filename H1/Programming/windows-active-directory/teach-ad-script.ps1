@@ -3,7 +3,7 @@
 $ADUsers = Import-Csv C:\Users\Administrator\Documents\brugerliste.csv -Delimiter ";"
 
 # Define UPN
-$UPN = "FRANKS.local"
+$UPN = "asmild.local"
 
 # Loop igennem felterne i csv filen
 foreach ($User in $ADUsers) {
