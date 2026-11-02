@@ -25,12 +25,12 @@ $adapter | New-NetIPAddress `
     -PrefixLength $MaskBits `
     -DefaultGateway $Gateway
 
-# Configure DNS
+# Configure DNS with value set from earlier.
 $adapter | Set-DnsClientServerAddress -ServerAddresses $DNS
 
 Write-Host "Network configuration completed."
 
-# Step 2: Set hostname.
+# Step 2: Set hostname. Automatic reboot might be added later.
 $hostname = Read-Host "Enter new hostname"
 Rename-Computer -NewName $hostname -Force
 
