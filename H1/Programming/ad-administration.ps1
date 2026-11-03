@@ -4,10 +4,10 @@ Import-Module ActiveDirectory
 # CONFIGURATION
 # ==================================================
 
-$DomainSuffix = "asmild.online"
-$BaseDN = "DC=asmild,DC=online"
+$DomainSuffix = "nordiktech.local"
+$BaseDN = "DC=nordiktech,DC=local"
 
-$ParentOUName = "asmild.online"
+$ParentOUName = "nordiktech.local"
 $ParentOUDN = "OU=$ParentOUName,$BaseDN"
 
 $GoogleSheetCsvUrl = "https://docs.google.com/spreadsheets/d/1nLxzP70sR0n3z6oV_uNI2-KRtxAp3Sb7kLWeqvoNzeA/export?format=csv"
@@ -29,7 +29,7 @@ function ConvertTo-Bool {
 function Get-Username {
     param([string]$FullName)
 
-    if (:IsNullOrWhiteSpace($FullName)) {
+    if ([string]::IsNullOrWhiteSpace($FullName)) {
         return $null
     }
 
@@ -68,7 +68,7 @@ function Get-NameParts {
 function Get-DepartmentOU {
     param([string]$Department)
 
-    if (:IsNullOrWhiteSpace($Department)) {
+    if ([string]::IsNullOrWhiteSpace($Department)) {
         return $ParentOUDN
     }
 
@@ -93,7 +93,7 @@ function Get-DepartmentOU {
 function Sync-ADUser {
     param($User)
 
-    if (:IsNullOrWhiteSpace($User.name)) {
+    if ([string]::IsNullOrWhiteSpace($User.name)) {
         return
     }
 
